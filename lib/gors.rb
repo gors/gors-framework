@@ -12,7 +12,8 @@ module Gors
     end
     def call env
       @logger.log env["REQUEST_METHOD"]+" "+env["REQUEST_PATH"]
-      controller = @routesklass.routes[env["PATH_INFO"]]
+      controller,matcheddata = @routesklass.routes(env["PATH_INFO"])
+
       if(controller == nil)
         if(@settings.server != "thin")
           response = ["<h1>404 Not Found</h1>"]
@@ -22,6 +23,7 @@ module Gors
         return @errorhandler.call "404"
       end
 
+      #
       if(controller.include? "Gors::")
         ctrl = controller.split("#")
         params = ctrl[1].split(":")
@@ -35,6 +37,7 @@ module Gors
       # Call the Controller
       request = Request.new
       request.request.params = Rack::Utils.parse_query(env["QUERY_STRING"])
+      request.request.params.merge (matcheddata)
       request.request.params.default = ""
 
       infoctrl = controller.split("#")
@@ -110,10 +113,41 @@ module Gors
     end
 
     def model hash
-      @routes["/api/"+hash.keys.first.to_s] = "Gors::Model#call:"+hash[hash.keys.first.to_s];
+      @routes[pattern_for("/api/"+hash.keys.first.to_s)] = "Gors::Model#call:"+hash[hash.keys.first.to_s];
       puts "Adding model with path "+hash.keys.first.to_s
     end
 
+    def routes(path)
+      hash = {}
+      @routes.each do |route,controller|
+        if(matched = path.match route)
+         
+          matched.names.each do |name|
+            hash[name.to_sym] = matched[name]
+          end
+         
+          return controller,hash
+        end
+      end
+    end
+    # Logic from github.com/alisnic/nyny
+    def pattern_for signature
+        return signature if signature.is_a? Regexp
+        build_regex(signature.start_with?('/') ? signature : "/#{signature}")
+    end
+
+    def build_regex signature
+        return %r(^#{signature}$) unless signature.include?(':')
+
+        groups = signature.split('/').map do |part|
+          next part if part.empty?
+          next part unless part.start_with? ':'
+          name = NAME_PATTERN.match(part)[1]
+          %Q{(?<#{name}>\\S+)}
+        end.select {|s| !s.empty? }.join('\/')
+
+        %r(^\/#{groups}$)
+    end
   end
   class Controller
     attr_accessor :info
@@ -139,6 +173,10 @@ module Gors
     def initialize
        @response = OpenStruct.new ({:headers => {}, :status_code => "200"})
        @request =  OpenStruct.new ({:ip => "",:user_agent => "",:headers => {},:params => {}})
+    end
+
+    def params
+      @request.params
     end
 
     def info
@@ -227,7 +265,6 @@ module Gors
         "<h1>403 Forbidden</h1>"
       end
   end
-
  
 end
 
